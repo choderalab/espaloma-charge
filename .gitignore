@@ -130,3 +130,9 @@ dmypy.json
 
 # model path
 *.pt
+
+# scratch working files for the DGL->PyG migration, not part of the package
+/scratchpad/
+
+# pixi local environment prefix (pixi.lock itself stays committed)
+.pixi/

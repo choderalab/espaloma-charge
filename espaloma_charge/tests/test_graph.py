@@ -8,5 +8,5 @@ def test_from_rdkit(smiles):
     from rdkit import Chem
     molecule = Chem.MolFromSmiles(smiles)
     graph = from_rdkit_mol(molecule)
-    assert molecule.GetNumAtoms() == graph.number_of_nodes()
-    assert molecule.GetNumBonds() * 2 == graph.number_of_edges()
+    assert molecule.GetNumAtoms() == graph.num_nodes
+    assert molecule.GetNumBonds() * 2 == graph.edge_index.shape[1]
