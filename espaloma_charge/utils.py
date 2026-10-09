@@ -77,26 +77,21 @@ def fp_rdkit(atom):
 
 
 def from_rdkit_mol(mol, use_fp=True):
-    import dgl
-    from rdkit import Chem
-
-    # initialize graph
-    g = dgl.DGLGraph()
+    from torch_geometric.data import Data
 
     # enter nodes
     n_atoms = mol.GetNumAtoms()
-    g.add_nodes(n_atoms)
-    g.ndata["type"] = torch.Tensor(
+    atomic_num = torch.Tensor(
         [[atom.GetAtomicNum()] for atom in mol.GetAtoms()]
     )
-    g.ndata["q_ref"] = torch.Tensor(
+    q_ref = torch.Tensor(
         [[atom.GetFormalCharge()] for atom in mol.GetAtoms()]
     )
-    h_v = torch.zeros(g.ndata["type"].shape[0], 100, dtype=torch.float32)
+    h_v = torch.zeros(atomic_num.shape[0], 100, dtype=torch.float32)
 
     h_v[
-        torch.arange(g.ndata["type"].shape[0]),
-        torch.squeeze(g.ndata["type"]).long(),
+        torch.arange(atomic_num.shape[0]),
+        torch.squeeze(atomic_num).long(),
     ] = 1.0
 
     h_v_fp = torch.stack([fp_rdkit(atom) for atom in mol.GetAtoms()], axis=0)
@@ -104,18 +99,23 @@ def from_rdkit_mol(mol, use_fp=True):
     if use_fp == True:
         h_v = torch.cat([h_v, h_v_fp], dim=-1)  # (n_atoms, 117)
 
-    g.ndata["h0"] = h_v
-
     # enter bonds
     bonds = list(mol.GetBonds())
     bonds_begin_idxs = [bond.GetBeginAtomIdx() for bond in bonds]
     bonds_end_idxs = [bond.GetEndAtomIdx() for bond in bonds]
-    bonds_types = [bond.GetBondType().real for bond in bonds]
 
-    # NOTE: dgl edges are directional
-    g.add_edges(bonds_begin_idxs, bonds_end_idxs)
-    g.add_edges(bonds_end_idxs, bonds_begin_idxs)
+    # NOTE: edges are directional, so both directions are added explicitly
+    edge_index = torch.tensor(
+        [
+            bonds_begin_idxs + bonds_end_idxs,
+            bonds_end_idxs + bonds_begin_idxs,
+        ],
+        dtype=torch.long,
+    )
 
-    # g.edata["type"] = torch.Tensor(bonds_types)[:, None].repeat(2, 1)
-
-    return g
+    return Data(
+        h0=h_v,
+        q_ref=q_ref,
+        edge_index=edge_index,
+        num_nodes=n_atoms,
+    )
