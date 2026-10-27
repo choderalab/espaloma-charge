@@ -1,8 +1,7 @@
 import pandas as pd
 import torch
-import dgl
+from torch_geometric.loader import DataLoader
 from openff.toolkit.topology import Molecule
-dgl.use_libxsmm(False)
 class ChargeDataset(torch.utils.data.Dataset):
     def __init__(self, graphs):
         super().__init__()
@@ -23,8 +22,8 @@ def run(args):
     for molecule in molecules:
         try:
             name = molecule.name
-            graph = from_rdkit_mol(molecule.to_rdkit()) 
-            graph.ndata["q_ref"] = torch.tensor(molecule.partial_charges.magnitude).unsqueeze(-1)
+            graph = from_rdkit_mol(molecule.to_rdkit())
+            graph.q_ref = torch.tensor(molecule.partial_charges.magnitude).unsqueeze(-1)
             name2graph[name].append(graph)
         except:
             failures.append(molecule.to_smiles())
@@ -62,19 +61,20 @@ def run(args):
     from espaloma_charge.models import (
         Sequential, ChargeReadout, ChargeEquilibrium
     )
+    from torch_geometric.nn import SAGEConv
     from functools import partial
     model = torch.nn.Sequential(
         Sequential(
-            layer=partial(dgl.nn.SAGEConv, aggregator_type="mean"),
+            layer=partial(SAGEConv, aggr="mean", bias=False),
             config=config,
         ),
         ChargeReadout(args.width),
         ChargeEquilibrium(),
     )
 
-    dataloader = dgl.dataloading.GraphDataLoader(dataset_train, batch_size=args.batch_size, pin_memory=True)
-    dataloader_valid = dgl.dataloading.GraphDataLoader(dataset_valid, batch_size=args.batch_size)
-    dataloader_test = dgl.dataloading.GraphDataLoader(dataset_test, batch_size=args.batch_size)
+    dataloader = DataLoader(dataset_train, batch_size=args.batch_size, pin_memory=True)
+    dataloader_valid = DataLoader(dataset_valid, batch_size=args.batch_size)
+    dataloader_test = DataLoader(dataset_test, batch_size=args.batch_size)
   
     rmse_vl_best = 9999.9
     rmse_te_best = 9999.9
@@ -94,8 +94,8 @@ def run(args):
                 g = g.to("cuda:0")
             g = model(g)
             loss = torch.nn.MSELoss()(
-                g.ndata["q_ref"],
-                g.ndata["q"],
+                g.q_ref,
+                g.q,
             )
 
             loss.backward()
@@ -112,16 +112,16 @@ def run(args):
                     if torch.cuda.is_available():
                         g = g.to("cuda:0")
                     g = model(g)
-                    q_vl.append(g.ndata["q"])
-                    q_vl_ref.append(g.ndata["q_ref"])
+                    q_vl.append(g.q)
+                    q_vl_ref.append(g.q_ref)
 
 
                 for g in dataloader_test:
                     if torch.cuda.is_available():
                         g = g.to("cuda:0")
                     g = model(g)
-                    q_te.append(g.ndata["q"])
-                    q_te_ref.append(g.ndata["q_ref"])
+                    q_te.append(g.q)
+                    q_te_ref.append(g.q_ref)
 
                 q_vl = torch.cat(q_vl)
                 q_vl_ref = torch.cat(q_vl_ref)

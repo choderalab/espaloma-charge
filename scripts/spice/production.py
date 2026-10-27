@@ -1,11 +1,10 @@
 import pandas as pd
 import torch
-import dgl
+from torch_geometric.loader import DataLoader
 from openff.toolkit.topology import Molecule
-dgl.use_libxsmm(False)
-class ChargeDataset(dgl.data.DGLDataset):
+class ChargeDataset(torch.utils.data.Dataset):
     def __init__(self, graphs):
-        super().__init__(name="charge_dataset")
+        super().__init__()
         self.graphs = graphs
 
     def __len__(self):
@@ -20,16 +19,17 @@ def run(args):
     graphs = [from_rdkit_mol(molecule.to_rdkit()) for molecule in molecules]
     charges = [molecule.partial_charges for molecule in molecules]
     for graph, charge in zip(graphs, charges):
-        graph.ndata["q_ref"] = torch.tensor(charge.magnitude).unsqueeze(-1)
+        graph.q_ref = torch.tensor(charge.magnitude).unsqueeze(-1)
 
     config = [args.width, args.activation] * args.depth
     from espaloma_charge.models import (
         Sequential, ChargeReadout, ChargeEquilibrium
     )
+    from torch_geometric.nn import SAGEConv
     from functools import partial
     model = torch.nn.Sequential(
         Sequential(
-            layer=partial(dgl.nn.SAGEConv, aggregator_type="mean"),
+            layer=partial(SAGEConv, aggr="mean", bias=False),
             config=config,
         ),
         ChargeReadout(args.width),
@@ -37,11 +37,17 @@ def run(args):
     )
 
     dataset = ChargeDataset(graphs)
-    dataset_train, dataset_valid, dataset_test = dgl.data.utils.split_dataset(dataset, random_state=2666)
-    dataloader = dgl.dataloading.GraphDataLoader(dataset_train, batch_size=args.batch_size, pin_memory=True)
+    # Consecutive split (matches dgl.data.utils.split_dataset's shuffle=False default), fractions from args.
+    n_data = len(dataset)
+    n_train = int(args.frac_train * n_data)
+    n_valid = int(args.frac_valid * n_data)
+    dataset_train = torch.utils.data.Subset(dataset, range(0, n_train))
+    dataset_valid = torch.utils.data.Subset(dataset, range(n_train, n_train + n_valid))
+    dataset_test = torch.utils.data.Subset(dataset, range(n_train + n_valid, n_data))
+    dataloader = DataLoader(dataset_train, batch_size=args.batch_size, pin_memory=True)
 
-    dataloader_valid = dgl.dataloading.GraphDataLoader(dataset_valid, batch_size=args.batch_size)
-    dataloader_test = dgl.dataloading.GraphDataLoader(dataset_test, batch_size=args.batch_size)
+    dataloader_valid = DataLoader(dataset_valid, batch_size=args.batch_size)
+    dataloader_test = DataLoader(dataset_test, batch_size=args.batch_size)
     
 
     rmse_vl_best = 9999.9
@@ -63,8 +69,8 @@ def run(args):
                 g = g.to("cuda:0")
             g = model(g)
             loss = torch.nn.MSELoss()(
-                g.ndata["q_ref"],
-                g.ndata["q"],
+                g.q_ref,
+                g.q,
             )
 
             print(loss, flush=True)
@@ -81,15 +87,15 @@ def run(args):
             if torch.cuda.is_available():
                 g = g.to("cuda:0")
                 g = model(g)
-            q_vl.append(g.ndata["q"])
-            q_vl_ref.append(g.ndata["q_ref"])
+            q_vl.append(g.q)
+            q_vl_ref.append(g.q_ref)
 
         for g in dataloader_test:
             if torch.cuda.is_available():
                 g = g.to("cuda:0")
             g = model(g)
-            q_te.append(g.ndata["q"])
-            q_te_ref.append(g.ndata["q_ref"])
+            q_te.append(g.q)
+            q_te_ref.append(g.q_ref)
 
         q_vl = torch.cat(q_vl)
         q_vl_ref = torch.cat(q_vl_ref)
@@ -131,6 +137,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--n_epochs", type=int, default=5000)
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--frac_train", type=float, default=0.8)
+    parser.add_argument("--frac_valid", type=float, default=0.1)
     parser.add_argument("--out", type=str, default="_out")
     args = parser.parse_args()
     run(args)
