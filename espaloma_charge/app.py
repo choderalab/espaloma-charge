@@ -2,22 +2,19 @@ import os
 import tempfile
 from urllib import request
 from rdkit import Chem
-import dgl
-try:
-    dgl.use_libxsmm(False)
-except:
-    pass
 import torch
 from torch.utils.model_zoo import load_url
 import numpy as np
+from torch_geometric.data import Batch
+from torch_geometric.utils import unbatch
 from .utils import from_rdkit_mol
 from typing import Sequence
 
 
-# TODO: Do we really want to define this at file level, 
+# TODO: Do we really want to define this at file level,
 # rather than within some kind of class?
 MODEL_URL = """
-https://github.com/choderalab/espaloma_charge/releases/download/v0.0.8/model.pt
+https://github.com/choderalab/espaloma_charge/releases/download/v0.1.0/model.pt
 """
 
 MODEL_PATH = ".espaloma_charge_model.pt"
@@ -57,7 +54,7 @@ def charge(
     if not os.path.exists(MODEL_PATH):
         request.urlretrieve(model_url, MODEL_PATH)
 
-    model = torch.load(MODEL_PATH)
+    model = torch.load(MODEL_PATH, weights_only=False)
 
     if total_charge is None:
         total_charge = Chem.GetFormalCharge(molecule)
@@ -68,7 +65,7 @@ def charge(
         model = model.cuda()
 
     graph = model(graph)
-    return graph.ndata["q"].cpu().detach().flatten().numpy()
+    return graph.q.cpu().detach().flatten().numpy()
 
 
 def charge_multiple(
@@ -97,18 +94,18 @@ def charge_multiple(
     if not os.path.exists(MODEL_PATH):
         request.urlretrieve(model_url, MODEL_PATH)
 
-    model = torch.load(MODEL_PATH)
+    model = torch.load(MODEL_PATH, weights_only=False)
 
     graphs = [from_rdkit_mol(molecule) for molecule in molecules]
-    graph = dgl.batch(graphs)
-    
+    graph = Batch.from_data_list(graphs)
+
     if torch.cuda.is_available():
         graph = graph.to("cuda:0")
         model = model.cuda()
 
     graph = model(graph)
     graph = graph.to("cpu")
-    graphs = dgl.unbatch(graph)
 
-    return [graph.ndata["q"].detach().flatten().numpy() for graph in graphs]
+    q = graph.q.detach().flatten()
+    return [q_i.numpy() for q_i in unbatch(q, graph.batch)]
 
