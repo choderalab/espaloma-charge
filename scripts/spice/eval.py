@@ -1,11 +1,9 @@
 import pandas as pd
 import torch
-import dgl
 from openff.toolkit.topology import Molecule
-# dgl.use_libxsmm(False)
-class ChargeDataset(dgl.data.DGLDataset):
+class ChargeDataset(torch.utils.data.Dataset):
     def __init__(self, graphs):
-        super().__init__(name="charge_dataset")
+        super().__init__()
         self.graphs = graphs
 
     def __len__(self):
@@ -24,8 +22,8 @@ def run():
     for molecule in molecules:
         try:
             name = molecule.name
-            graph = from_rdkit_mol(molecule.to_rdkit()) 
-            graph.ndata["q_ref"] = torch.tensor(molecule.partial_charges.magnitude).unsqueeze(-1)
+            graph = from_rdkit_mol(molecule.to_rdkit())
+            graph.q_ref = torch.tensor(molecule.partial_charges.magnitude).unsqueeze(-1)
             name2graph[name].append(graph)
             name2smiles[name].append(molecule.to_smiles())
         except:
@@ -48,7 +46,7 @@ def run():
     dataset_test = ChargeDataset([item for item in name2graph[name] for name in names_test])
     smiles_test = [item for item in name2smiles[name] for name in names_test]
 
-    model = torch.load("model.pt", map_location="cpu")
+    model = torch.load("model.pt", map_location="cpu", weights_only=False)
 
     import pandas as pd
     df = pd.DataFrame(columns=["SMILES", "RMSE"])
@@ -60,17 +58,17 @@ def run():
         for smiles, g in zip(name2smiles[name], name2graph[name]):
             with torch.no_grad():
                 g = model(g)
-            q.append(g.ndata['q'].flatten().detach())
-            q_ref.append(g.ndata['q_ref'].flatten().detach())
-            print(g.ndata["q_ref"].sum(), g.ndata["q"].sum())
+            q.append(g.q.flatten().detach())
+            q_ref.append(g.q_ref.flatten().detach())
+            print(g.q_ref.sum(), g.q.sum())
             df = df.append(
                 {
                     'NAME': name,
                     'SMILES': smiles,
-                    'RMSE': (g.ndata['q_ref'].flatten() - g.ndata['q'].flatten()).pow(2).mean().pow(0.5).item(),
-                    'Q': g.ndata['q'].flatten().detach().numpy(),
-                    'Q_REF': g.ndata['q_ref'].flatten().detach().numpy(),
-                    'TOTAL_CHARGE': g.ndata['q_ref'].sum().item(),
+                    'RMSE': (g.q_ref.flatten() - g.q.flatten()).pow(2).mean().pow(0.5).item(),
+                    'Q': g.q.flatten().detach().numpy(),
+                    'Q_REF': g.q_ref.flatten().detach().numpy(),
+                    'TOTAL_CHARGE': g.q_ref.sum().item(),
                 },
                 ignore_index=True,
             )

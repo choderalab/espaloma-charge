@@ -4,12 +4,12 @@ def test_import():
 
 def test_sequential():
     from functools import partial
-    import dgl
+    from torch_geometric.nn import SAGEConv
     from rdkit import Chem
     from espaloma_charge.utils import from_rdkit_mol
     from espaloma_charge.models import Sequential
     sequential = Sequential(
-        layer=partial(dgl.nn.SAGEConv, aggregator_type="mean"),
+        layer=partial(SAGEConv, aggr="mean"),
         config=[32, "relu", 32, "relu", 32, "relu"],
     )
     molecule = Chem.MolFromSmiles("C")
@@ -26,7 +26,7 @@ def test_readout_and_equilibrium():
     for atom in molecule.GetAtoms():
         print(atom.GetHybridization())
     graph = from_rdkit_mol(molecule)
-    graph.ndata["h"] = torch.randn(5, 3)
+    graph.h = torch.randn(5, 3)
     readout = ChargeReadout(3)
     graph = readout(graph)
     graph = ChargeEquilibrium()(graph)

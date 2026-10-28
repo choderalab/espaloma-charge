@@ -1,12 +1,9 @@
 name: test
 channels:
-  # Reduces image size by using empty cudatoolkit package
-  - jaimergp/label/unsupported-cudatoolkit-shim
   - conda-forge
 dependencies:
   - python
   - openff-toolkit >=0.14.*
   - pytest
   - pytorch
-  - dgl ~=2.
-  - torchdata
+  - pytorch_geometric

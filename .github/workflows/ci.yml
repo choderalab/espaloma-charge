@@ -1,4 +1,4 @@
-name: Python Package using Conda
+name: Python Package
 
 on:
   pull_request:
@@ -17,13 +17,13 @@ defaults:
     shell: bash -l {0}
 
 jobs:
-  CI:
+  conda-forge:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-12]
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
     - uses: actions/checkout@v3
@@ -46,3 +46,30 @@ jobs:
     - name: Test with pytest
       run: |
         pytest -v espaloma_charge
+
+  # Pure-pip install path (no conda) -- core `torch_geometric` has no compiled,
+  # per-platform wheel dependency, so this must work without conda-forge.
+  # openff-toolkit isn't reliably pip-installable, so test_toolkitwrapper.py
+  # is skipped here; it's covered by the conda-forge job above.
+  pip-only:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install torch torch-geometric pytest
+        python -m pip install . 
+
+    - name: Test with pytest
+      run: |
+        pytest -v espaloma_charge --ignore=espaloma_charge/tests/test_toolkitwrapper.py

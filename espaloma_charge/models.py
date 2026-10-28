@@ -55,11 +55,11 @@ class _Sequential(torch.nn.Module):
 
                 self.exes.append("o" + str(idx))
 
-    def forward(self, g, x, **kwargs):
+    def forward(self, x, edge_index=None, **kwargs):
         for exe in self.exes:
             if exe.startswith("d"):
-                if g is not None:
-                    x = getattr(self, exe)(g, x)
+                if edge_index is not None:
+                    x = getattr(self, exe)(x, edge_index)
                 else:
                     x = getattr(self, exe)(x)
             else:
@@ -74,7 +74,7 @@ class Sequential(torch.nn.Module):
     Parameters
     ----------
     layer : torch.nn.Module
-        DGL graph convolution layers.
+        PyTorch Geometric graph convolution layer class.
 
     config : List
         A sequence of numbers (for units) and strings (for activation functions)
@@ -108,55 +108,43 @@ class Sequential(torch.nn.Module):
             layer, config, in_features=input_units, model_kwargs=model_kwargs
         )
 
-    def _forward(self, g, x):
-        """Forward pass with graph and features."""
-        for exe in self.exes:
-            if exe.startswith("d"):
-                x = getattr(self, exe)(g, x)
-            else:
-                x = getattr(self, exe)(x)
-
-        return x
-
-    def forward(self, g, x=None, **kwargs):
+    def forward(self, data, x=None, **kwargs):
         """Forward pass.
 
         Parameters
         ----------
-        g : `dgl.DGLHeteroGraph`,
+        data : `torch_geometric.data.Data` or `torch_geometric.data.Batch`
             input graph
 
         Returns
         -------
-        g : `dgl.DGLHeteroGraph`
+        data : `torch_geometric.data.Data` or `torch_geometric.data.Batch`
             output graph
         """
-        import dgl
-
         if x is None:
             # get node attributes
-            x = g.ndata["h0"]
+            x = data.h0
             x = self.f_in(x)
 
         # message passing on homo graph
-        x = self._sequential(g, x)
+        x = self._sequential(x, data.edge_index)
 
         # put attribute back in the graph
-        g.ndata["h"] = x
+        data.h = x
 
-        return g
+        return data
 
-def get_charges(node):
+def get_charges(e, s, sum_e_s_inv, sum_s_inv, sum_q):
     """ Solve the function to get the absolute charges of atoms in a
     molecule from parameters.
     Parameters
     ----------
-    e : tf.Tensor, dtype = tf.float32,
+    e : torch.Tensor, dtype = torch.float32,
         electronegativity.
-    s : tf.Tensor, dtype = tf.float32,
+    s : torch.Tensor, dtype = torch.float32,
         hardness.
-    Q : tf.Tensor, dtype = tf.float32, shape=(),
-        total charge of a molecule.
+    sum_q : torch.Tensor, dtype = torch.float32,
+        total charge of a molecule, broadcast to every atom in it.
     We use Lagrange multipliers to analytically give the solution.
     $$
     U({\bf q})
@@ -178,27 +166,18 @@ def get_charges(node):
         }{\sum\limits_{j=1}^N s_j^{-1}}
     $$
     """
-    e = node.data["e"]
-    s = node.data["s"]
-    sum_e_s_inv = node.data["sum_e_s_inv"]
-    sum_s_inv = node.data["sum_s_inv"]
-    sum_q = node.data["sum_q"]
-
-    return {
-        "q": -e * s**-1
-        + (s**-1) * torch.div(sum_q + sum_e_s_inv, sum_s_inv)
-    }
+    return -e * s**-1 + (s**-1) * torch.div(sum_q + sum_e_s_inv, sum_s_inv)
 
 class ChargeReadout(torch.nn.Module):
     def __init__(self, in_features):
         super().__init__()
         self.fc_params = torch.nn.Linear(in_features, 2)
 
-    def forward(self, g, **kwargs):
-        h = self.fc_params(g.ndata["h"])
+    def forward(self, data, **kwargs):
+        h = self.fc_params(data.h)
         e, s = h.split(1, -1)
-        g.ndata["e"], g.ndata["s"] = e, s
-        return g
+        data.e, data.s = e, s
+        return data
 
 class ChargeEquilibrium(torch.nn.Module):
     """Charge equilibrium within batches of molecules."""
@@ -206,62 +185,31 @@ class ChargeEquilibrium(torch.nn.Module):
     def __init__(self):
         super(ChargeEquilibrium, self).__init__()
 
-    def forward(self, g, total_charge=0.0):
+    def forward(self, data, total_charge=0.0):
         """apply charge equilibrium to all molecules in batch"""
+        from torch_geometric.utils import scatter
+
         # calculate $s ^ {-1}$ and $ es ^ {-1}$
-        import dgl
+        s_inv = data.s ** -1
+        e_s_inv = data.e * s_inv
 
-        g.apply_nodes(
-            lambda node: {"s_inv": node.data["s"] ** -1},
-        )
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            batch = torch.zeros(data.num_nodes, dtype=torch.long, device=data.s.device)
+        num_graphs = int(batch.max()) + 1
 
-        g.apply_nodes(
-            lambda node: {"e_s_inv": node.data["e"] * node.data["s"] ** -1},
-        )
-
-        if "q_ref" in g.ndata:
-            total_charge = dgl.sum_nodes(g, "q_ref")
+        if "q_ref" in data:
+            total_charge = scatter(data.q_ref, batch, dim=0, dim_size=num_graphs, reduce="sum")
         else:
-            total_charge = torch.ones(g.batch_size, 1, device=g.device) * total_charge
-        
-        g.ndata["sum_q"] = dgl.broadcast_nodes(g, total_charge)
+            total_charge = torch.ones(num_graphs, 1, device=data.s.device) * total_charge
 
-        sum_s_inv = dgl.sum_nodes(g, "s_inv")
-        sum_e_s_inv = dgl.sum_nodes(g, "e_s_inv")
-        g.ndata["sum_s_inv"] = dgl.broadcast_nodes(g, sum_s_inv)
-        g.ndata["sum_e_s_inv"] = dgl.broadcast_nodes(g, sum_e_s_inv)
+        sum_q = total_charge[batch]
 
-        # g.update_all(
-        #     dgl.function.copy_src(src="sum_q", out="m_sum_q"),
-        #     dgl.function.sum(msg="m_sum_q", out="sum_q"),
-        #     etype="g_has_n1",
-        # )
-        #
-        # # get the sum of $s^{-1}$ and $m_s^{-1}$
-        # g.update_all(
-        #     dgl.function.copy_src(src="s_inv", out="m_s_inv"),
-        #     dgl.function.sum(msg="m_s_inv", out="sum_s_inv"),
-        #     etype="n1_in_g",
-        # )
-        #
-        # g.update_all(
-        #     dgl.function.copy_src(src="e_s_inv", out="m_e_s_inv"),
-        #     dgl.function.sum(msg="m_e_s_inv", out="sum_e_s_inv"),
-        #     etype="n1_in_g",
-        # )
-        #
-        # g.update_all(
-        #     dgl.function.copy_src(src="sum_s_inv", out="m_sum_s_inv"),
-        #     dgl.function.sum(msg="m_sum_s_inv", out="sum_s_inv"),
-        #     etype="g_has_n1",
-        # )
-        #
-        # g.update_all(
-        #     dgl.function.copy_src(src="sum_e_s_inv", out="m_sum_e_s_inv"),
-        #     dgl.function.sum(msg="m_sum_e_s_inv", out="sum_e_s_inv"),
-        #     etype="g_has_n1",
-        # )
+        sum_s_inv = scatter(s_inv, batch, dim=0, dim_size=num_graphs, reduce="sum")
+        sum_e_s_inv = scatter(e_s_inv, batch, dim=0, dim_size=num_graphs, reduce="sum")
+        sum_s_inv = sum_s_inv[batch]
+        sum_e_s_inv = sum_e_s_inv[batch]
 
-        g.apply_nodes(get_charges)
+        data.q = get_charges(data.e, data.s, sum_e_s_inv, sum_s_inv, sum_q)
 
-        return g
+        return data

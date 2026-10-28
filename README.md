@@ -23,13 +23,10 @@ $ mamba create -n espaloma -c conda-forge espaloma_charge openff-toolkit
 
 ### pypi
 
-We also have `espaloma_charge` on pypi, but the `dgl` dependency must be installed first.
+We also have `espaloma_charge` on pypi:
 
 ```bash
-# First create a conda env with mamba, conda, or micromamba
-$ mamba create -n espaloma -c conda-forge dgl==1.1.2 pip python
-$ mamba activate espaloma
-$ pip install espaloma_charge
+$ pip install torch torch-geometric espaloma_charge
 ```
 
 ## Examples
@@ -63,6 +60,15 @@ Assign charges to your favorite molecule in
 ```bash
 $ espaloma_charge -i in.mol2 -o in.crg
 $ antechamber -fi mol2 -fo mol2 -i in.mol2 -o out.mol2 -c rc -cf in.crg 
+```
+
+## Development
+
+For a reproducible development environment, we use [`pixi`](https://pixi.sh). It mixes conda-forge packages (`rdkit`, `openff-toolkit`, `pytorch`) with a PyPI `torch-geometric`, and installs `espaloma_charge` itself in editable mode.
+
+```bash
+$ pixi install -e dev
+$ pixi run -e dev pytest -v espaloma_charge
 ```
 
 ## Training data

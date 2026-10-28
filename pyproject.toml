@@ -1,0 +1,31 @@
+[tool.pixi.workspace]
+name = "espaloma_charge"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-64", "osx-arm64"]
+
+# Runtime dependencies sourced from conda-forge. torch-geometric is PyPI-only
+# below (see [tool.pixi.pypi-dependencies]) -- this is the whole point of
+# using pixi here: it lets us mix a conda-forge pytorch build with a PyPI
+# torch-geometric, sidestepping the conda-forge solver dead end we hit
+# with dgl/torchdata (dgl's conda-forge build caps pytorch<2.4, while every
+# conda-forge torchdata build new enough to still work requires pytorch>=2.6
+# -- unresolvable via conda metadata alone).
+[tool.pixi.dependencies]
+python = ">=3.12,<3.15"
+rdkit = "*"
+openff-toolkit = ">=0.14"
+pytorch = "*"
+
+[tool.pixi.pypi-dependencies]
+torch-geometric = "*"
+espaloma_charge = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+
+[tool.pixi.feature.dev.pypi-dependencies]
+flake8 = "*"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
